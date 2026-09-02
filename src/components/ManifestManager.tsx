@@ -16,9 +16,13 @@ import {
   Eye,
   Code,
   FileCheck2,
-  AlertCircle
+  AlertCircle,
+  Plus,
+  ClipboardList
 } from 'lucide-react';
 import { CourseItem, ManifestData } from '../types';
+import { parseAndNormalizeManifest } from '../utils/manifestParser';
+import { BatchUrlImporterModal } from './BatchUrlImporterModal';
 
 interface ManifestManagerProps {
   manifest: ManifestData;
@@ -39,6 +43,7 @@ export const ManifestManager: React.FC<ManifestManagerProps> = ({
   const [viewRawJson, setViewRawJson] = useState(false);
   const [jsonText, setJsonText] = useState(JSON.stringify(manifest, null, 2));
   const [jsonError, setJsonError] = useState<string | null>(null);
+  const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Stats calculation
@@ -137,49 +142,19 @@ export const ManifestManager: React.FC<ManifestManagerProps> = ({
     reader.onload = (event) => {
       try {
         const text = event.target?.result as string;
-        const parsed = JSON.parse(text);
+        const normalized = parseAndNormalizeManifest(text);
 
-        // Normalize if user uploads array or wrapped object
-        let normalizedCourses: CourseItem[] = [];
-        if (Array.isArray(parsed)) {
-          normalizedCourses = parsed;
-        } else if (parsed.courses && Array.isArray(parsed.courses)) {
-          normalizedCourses = parsed.courses;
-        } else {
-          throw new Error('Unrecognized manifest format. Must contain a "courses" list or array of courses.');
+        if (normalized.courses.length === 0) {
+          throw new Error('No courses or videos found in the file.');
         }
 
-        // Ensure selection property
-        normalizedCourses = normalizedCourses.map((c, i) => ({
-          ...c,
-          id: c.id || `course-${i}`,
-          selected: true,
-          modules: (c.modules || []).map((m, mi) => ({
-            ...m,
-            id: m.id || `mod-${i}-${mi}`,
-            index: m.index || mi + 1,
-            videos: (m.videos || []).map((v, vi) => ({
-              ...v,
-              id: v.id || `vid-${i}-${mi}-${vi}`,
-              selected: true,
-            })),
-          })),
-        }));
-
-        const newManifest: ManifestData = {
-          courses: normalizedCourses,
-          metadata: {
-            exportedAt: new Date().toISOString(),
-            source: file.name,
-            totalVideos: normalizedCourses.reduce(
-              (acc, c) => acc + c.modules.reduce((mAcc, m) => mAcc + m.videos.length, 0),
-              0
-            ),
-          },
+        normalized.metadata = {
+          ...normalized.metadata,
+          source: file.name,
         };
 
-        setManifest(newManifest);
-        setJsonText(JSON.stringify(newManifest, null, 2));
+        setManifest(normalized);
+        setJsonText(JSON.stringify(normalized, null, 2));
         setJsonError(null);
       } catch (err: any) {
         setJsonError(`Failed to parse uploaded JSON file: ${err.message}`);
@@ -190,27 +165,39 @@ export const ManifestManager: React.FC<ManifestManagerProps> = ({
 
   const handleApplyJsonText = () => {
     try {
-      const parsed = JSON.parse(jsonText);
-      let normalizedCourses: CourseItem[] = [];
-      if (Array.isArray(parsed)) {
-        normalizedCourses = parsed;
-      } else if (parsed.courses && Array.isArray(parsed.courses)) {
-        normalizedCourses = parsed.courses;
-      } else {
-        throw new Error('JSON structure must include "courses" array or be an array of course objects.');
+      const normalized = parseAndNormalizeManifest(jsonText);
+      if (normalized.courses.length === 0) {
+        throw new Error('No courses or videos found in the JSON.');
       }
 
-      setManifest({
-        courses: normalizedCourses,
-        metadata: parsed.metadata || {
-          exportedAt: new Date().toISOString(),
-          source: 'Manual Editor',
-        },
-      });
+      setManifest(normalized);
       setJsonError(null);
       setViewRawJson(false);
     } catch (err: any) {
       setJsonError(`Invalid JSON: ${err.message}`);
+    }
+  };
+
+  const handleBatchImport = (newManifest: ManifestData, mode: 'replace' | 'append') => {
+    if (mode === 'replace') {
+      setManifest(newManifest);
+      setJsonText(JSON.stringify(newManifest, null, 2));
+    } else {
+      setManifest((prev) => {
+        const mergedCourses = [...prev.courses, ...newManifest.courses];
+        const merged: ManifestData = {
+          courses: mergedCourses,
+          metadata: {
+            ...prev.metadata,
+            totalVideos: mergedCourses.reduce(
+              (acc, c) => acc + c.modules.reduce((mAcc, m) => mAcc + m.videos.length, 0),
+              0
+            ),
+          },
+        };
+        setJsonText(JSON.stringify(merged, null, 2));
+        return merged;
+      });
     }
   };
 
@@ -270,6 +257,15 @@ export const ManifestManager: React.FC<ManifestManagerProps> = ({
 
           {/* Action Buttons */}
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              id="batch-import-manifest-btn"
+              onClick={() => setIsBatchModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-slate-950 text-xs font-bold rounded-lg shadow transition-colors"
+            >
+              <ClipboardList className="h-3.5 w-3.5" />
+              <span>Import URLs / JSON</span>
+            </button>
+
             <input
               type="file"
               ref={fileInputRef}
@@ -283,7 +279,7 @@ export const ManifestManager: React.FC<ManifestManagerProps> = ({
               className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg border border-slate-700 transition-colors"
             >
               <Upload className="h-3.5 w-3.5 text-orange-400" />
-              <span>Upload JSON</span>
+              <span>Upload File</span>
             </button>
 
             <button
@@ -337,7 +333,7 @@ export const ManifestManager: React.FC<ManifestManagerProps> = ({
             <p className="text-xl font-bold text-white mt-0.5">{totalVideos}</p>
           </div>
           <div className="bg-slate-950/60 border border-slate-800/80 rounded-xl p-3">
-            <span className="text-[11px] text-orange-400 font-medium">Queued for Colab</span>
+            <span className="text-[11px] text-orange-400 font-medium">Queued for Drive</span>
             <p className="text-xl font-bold text-orange-400 mt-0.5">
               {selectedVideos} <span className="text-xs text-slate-400 font-normal">/ {totalVideos}</span>
             </p>
@@ -571,6 +567,13 @@ export const ManifestManager: React.FC<ManifestManagerProps> = ({
           </div>
         </div>
       )}
+
+      {/* Batch Importer Modal */}
+      <BatchUrlImporterModal
+        isOpen={isBatchModalOpen}
+        onClose={() => setIsBatchModalOpen(false)}
+        onImport={handleBatchImport}
+      />
     </div>
   );
 };

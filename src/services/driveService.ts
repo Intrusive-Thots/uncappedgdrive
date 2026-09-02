@@ -160,7 +160,7 @@ export async function getDriveFileContent(
 export async function uploadFileToDrive(
   accessToken: string,
   fileName: string,
-  content: string,
+  content: string | Blob,
   mimeType: string = 'application/json',
   parentFolderId?: string
 ): Promise<DriveFileItem> {
@@ -176,14 +176,27 @@ export async function uploadFileToDrive(
     metadata.parents = [parentFolderId];
   }
 
-  const multipartRequestBody =
-    delimiter +
-    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-    JSON.stringify(metadata) +
-    delimiter +
-    `Content-Type: ${mimeType}\r\n\r\n` +
-    content +
-    closeDelimiter;
+  let body: BodyInit;
+  if (typeof content === 'string') {
+    body =
+      delimiter +
+      'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+      JSON.stringify(metadata) +
+      delimiter +
+      `Content-Type: ${mimeType}\r\n\r\n` +
+      content +
+      closeDelimiter;
+  } else {
+    const metaBlob = new Blob([
+      delimiter +
+        'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+        JSON.stringify(metadata) +
+        delimiter +
+        `Content-Type: ${mimeType}\r\n\r\n`,
+    ]);
+    const closeBlob = new Blob([closeDelimiter]);
+    body = new Blob([metaBlob, content, closeBlob]);
+  }
 
   const response = await fetch(DRIVE_UPLOAD_URL, {
     method: 'POST',
@@ -191,7 +204,7 @@ export async function uploadFileToDrive(
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': `multipart/related; boundary=${boundary}`,
     },
-    body: multipartRequestBody,
+    body: body,
   });
 
   if (!response.ok) {
