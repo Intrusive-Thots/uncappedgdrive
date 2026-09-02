@@ -1,0 +1,6 @@
+{
+  "name": "Colab Stream Archiver",
+  "description": "Automated video scraper and direct Google Drive archiver powered by session cookies, manifests, and yt-dlp on Google Colab.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
