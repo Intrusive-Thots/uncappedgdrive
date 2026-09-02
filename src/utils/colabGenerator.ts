@@ -135,7 +135,7 @@ def build_ytdlp_command(video_url: str, output_filepath: str) -> list:
         "--no-check-certificates",
         "--retries", str(RETRY_ATTEMPTS),
         "--fragment-retries", "10",
-        "--buffersize", "16M",
+        "--buffer-size", "16M",
         "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
     ]
 
