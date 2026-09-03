@@ -375,7 +375,8 @@ export function generateColabNotebook(
     metadata: {
       colab: {
         provenance: [],
-        toc_visible: true
+        toc_visible: true,
+        gpuType: 'T4'
       },
       kernelspec: {
         name: 'python3',
@@ -383,7 +384,8 @@ export function generateColabNotebook(
       },
       language_info: {
         name: 'python'
-      }
+      },
+      accelerator: 'GPU'
     },
     cells: [
       {
