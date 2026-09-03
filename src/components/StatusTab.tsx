@@ -29,6 +29,7 @@ interface StatusTabProps {
   manifest: ManifestData;
   user: User | null;
   accessToken: string | null;
+  cookiesRaw?: string;
   onSwitchToCopier: () => void;
 }
 
@@ -36,6 +37,7 @@ export const StatusTab: React.FC<StatusTabProps> = ({
   manifest,
   user,
   accessToken,
+  cookiesRaw,
   onSwitchToCopier,
 }) => {
   const [transferStats, setTransferStats] = useState<VideoTransferStats>(
@@ -45,6 +47,7 @@ export const StatusTab: React.FC<StatusTabProps> = ({
   const [syncedDriveFiles, setSyncedDriveFiles] = useState<DriveFileItem[]>([]);
   const [isRefreshingDrive, setIsRefreshingDrive] = useState(false);
   const [activeFilter, setActiveFilter] = useState<'all' | 'completed' | 'failed' | 'pending'>('all');
+  const [selectedRole, setSelectedRole] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
   // Subscribe to in-app transfer engine updates
@@ -84,7 +87,7 @@ export const StatusTab: React.FC<StatusTabProps> = ({
       onSwitchToCopier();
       return;
     }
-    videoTransferEngine.startTransfer(accessToken);
+    videoTransferEngine.startTransfer(accessToken, cookiesRaw);
   };
 
   const handlePause = () => {
@@ -96,7 +99,7 @@ export const StatusTab: React.FC<StatusTabProps> = ({
       onSwitchToCopier();
       return;
     }
-    videoTransferEngine.retryTask(taskId, accessToken);
+    videoTransferEngine.retryTask(taskId, accessToken, cookiesRaw);
   };
 
   const handleClear = () => {
@@ -108,6 +111,8 @@ export const StatusTab: React.FC<StatusTabProps> = ({
     if (activeFilter === 'completed' && t.status !== 'completed') return false;
     if (activeFilter === 'failed' && t.status !== 'failed') return false;
     if (activeFilter === 'pending' && (t.status === 'completed' || t.status === 'failed')) return false;
+
+    if (selectedRole !== 'all' && t.role !== selectedRole) return false;
 
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
@@ -214,15 +219,53 @@ export const StatusTab: React.FC<StatusTabProps> = ({
           </div>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-          <div className="flex items-center justify-between text-xs text-rose-400">
-            <span>Failed</span>
-            <XCircle className="h-4 w-4 text-rose-400" />
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between text-xs text-rose-400">
+              <span>Failed</span>
+              <XCircle className="h-4 w-4 text-rose-400" />
+            </div>
+            <div className="text-2xl font-black text-rose-400 mt-1">{transferStats.failed}</div>
           </div>
-          <div className="text-2xl font-black text-rose-400 mt-1">{transferStats.failed}</div>
-          <div className="text-[11px] text-slate-400 mt-1 font-mono">
-            {transferStats.failed > 0 ? 'Retry available' : '0 errors'}
+          {transferStats.failed > 0 && (
+            <button
+              onClick={() => videoTransferEngine.retryAllFailed(accessToken || '', cookiesRaw)}
+              className="mt-2 w-full py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 rounded-lg text-[11px] font-bold flex items-center justify-center space-x-1 transition"
+            >
+              <RotateCcw className="h-3 w-3" />
+              <span>Retry All Failed</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Speed & Concurrency Control Bar */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="flex items-center space-x-2">
+          <Zap className="h-4 w-4 text-orange-400" />
+          <span className="text-slate-300 font-semibold">Transfer Concurrency:</span>
+          <div className="flex items-center space-x-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+            {[1, 2, 3].map((num) => (
+              <button
+                key={num}
+                onClick={() => videoTransferEngine.setConcurrency(num)}
+                className={`px-2.5 py-1 rounded-lg font-bold transition ${
+                  transferStats.concurrency === num
+                    ? 'bg-orange-500 text-slate-950 shadow'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {num === 1 ? '1x (Safe)' : num === 2 ? '2x (Parallel)' : '3x (Fast)'}
+              </button>
+            ))}
           </div>
+        </div>
+
+        <div className="flex items-center space-x-2">
+          <span className="text-slate-400">Active Workers:</span>
+          <span className="font-mono text-emerald-400 font-bold">
+            {transferStats.activeTasks?.length || 0} / {transferStats.concurrency}
+          </span>
         </div>
       </div>
 
@@ -355,6 +398,32 @@ export const StatusTab: React.FC<StatusTabProps> = ({
           </div>
         </div>
 
+        {/* Role Filter Chips */}
+        <div className="px-4 py-2 bg-slate-950/60 border-b border-slate-800 flex items-center space-x-1.5 overflow-x-auto text-[11px]">
+          <span className="text-slate-500 font-medium shrink-0 mr-1">Role:</span>
+          {[
+            { id: 'all', label: 'All Roles' },
+            { id: 'Mid', label: 'Mid' },
+            { id: 'ADC', label: 'ADC' },
+            { id: 'Top', label: 'Top' },
+            { id: 'Jungle', label: 'Jungle' },
+            { id: 'Support', label: 'Support' },
+            { id: 'Fundamentals', label: 'Fundamentals' },
+          ].map((r) => (
+            <button
+              key={r.id}
+              onClick={() => setSelectedRole(r.id)}
+              className={`px-2.5 py-1 rounded-lg font-medium whitespace-nowrap transition ${
+                selectedRole === r.id
+                  ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30 font-bold'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              }`}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+
         {/* Task List */}
         <div className="divide-y divide-slate-800/80 max-h-96 overflow-y-auto">
           {filteredTasks.length === 0 ? (
@@ -383,9 +452,19 @@ export const StatusTab: React.FC<StatusTabProps> = ({
                     <div className="text-xs font-semibold text-slate-200 truncate">
                       {task.videoTitle}
                     </div>
-                    <div className="text-[11px] text-slate-500 truncate">
-                      {task.courseTitle} &bull; {task.moduleTitle}
+                    <div className="text-[11px] text-slate-500 truncate flex items-center space-x-2">
+                      <span>{task.courseTitle} &bull; {task.moduleTitle}</span>
+                      {task.sizeBytes && task.sizeBytes > 0 && (
+                        <span className="text-emerald-400 font-mono font-medium">
+                          &bull; {(task.sizeBytes / (1024 * 1024)).toFixed(1)} MB
+                        </span>
+                      )}
                     </div>
+                    {task.error && (
+                      <div className="text-[10px] text-rose-400 mt-0.5 truncate max-w-md">
+                        {task.error}
+                      </div>
+                    )}
                   </div>
                 </div>
 

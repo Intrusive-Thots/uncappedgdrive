@@ -586,6 +586,7 @@ for c in data.get('courses', []):
                 'yt-dlp', v['url'], '-o', out_path,
                 '--cookies', '$COOKIES',
                 '--download-archive', '$ARCHIVE_LOG',
+                '--buffer-size', '16M',
                 '--downloader', 'aria2c',
                 '--downloader-args', 'aria2c:-x ${config.aria2Connections} -s ${config.aria2Connections} -k 1M'
             ]
@@ -595,3 +596,5 @@ for c in data.get('courses', []):
 echo "🎉 Done! Check your Google Drive folder: $DRIVE_DIR"
 `;
 }
+
+export const generateJupyterNotebook = generateColabNotebook;

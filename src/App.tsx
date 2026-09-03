@@ -226,6 +226,7 @@ export default function App() {
             manifest={manifest}
             user={user}
             accessToken={accessToken}
+            cookiesRaw={cookiesRaw}
             onSwitchToCopier={() => setActiveTab('simple')}
           />
         )}

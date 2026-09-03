@@ -19,6 +19,11 @@ import {
   ClipboardList,
   Activity,
   ArrowRight,
+  Download,
+  Copy,
+  Terminal,
+  Cloud,
+  FileCode,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 import { googleSignIn, logout, initAuth } from '../services/googleAuth';
@@ -28,6 +33,12 @@ import { SAMPLE_COOKIES_TXT } from '../data/sampleManifest';
 import { jsonToNetscapeCookies } from '../utils/cookieValidator';
 import { videoTransferEngine, VideoTransferStats } from '../services/videoTransferEngine';
 import { BatchUrlImporterModal } from './BatchUrlImporterModal';
+import { downloadTextFile } from '../utils/fileDownloader';
+import {
+  generateJupyterNotebook,
+  generatePythonScript,
+  generateShellScript,
+} from '../utils/colabGenerator';
 
 interface SimplifiedDriveCopierProps {
   config: ArchiverConfig;
@@ -64,6 +75,8 @@ export const SimplifiedDriveCopier: React.FC<SimplifiedDriveCopierProps> = ({
   const [transferStats, setTransferStats] = useState<VideoTransferStats>(videoTransferEngine.getStats());
   const [isBatchModalOpen, setIsBatchModalOpen] = useState(false);
   const [showCourseList, setShowCourseList] = useState(false);
+  const [selectedRoleFilter, setSelectedRoleFilter] = useState<string>('all');
+  const [showBetterWays, setShowBetterWays] = useState(true);
   const [notification, setNotification] = useState<{
     type: 'success' | 'error' | 'info';
     text: string;
@@ -76,6 +89,31 @@ export const SimplifiedDriveCopier: React.FC<SimplifiedDriveCopierProps> = ({
   const totalVideos = manifest.courses.reduce((acc, c) => {
     return acc + c.modules.reduce((mAcc, m) => mAcc + m.videos.length, 0);
   }, 0);
+
+  // Compute role breakdown across manifest
+  const roleBreakdown = React.useMemo(() => {
+    const counts: Record<string, number> = {
+      all: 0,
+      Mid: 0,
+      ADC: 0,
+      Top: 0,
+      Jungle: 0,
+      Support: 0,
+      Fundamentals: 0,
+    };
+    for (const c of manifest.courses) {
+      for (const m of c.modules) {
+        for (const v of m.videos) {
+          counts.all++;
+          const role = videoTransferEngine.detectRole(c.title, m.title, v.title);
+          if (counts[role] !== undefined) {
+            counts[role]++;
+          }
+        }
+      }
+    }
+    return counts;
+  }, [manifest]);
 
   // Subscribe to transfer engine
   useEffect(() => {
@@ -223,11 +261,32 @@ export const SimplifiedDriveCopier: React.FC<SimplifiedDriveCopierProps> = ({
       return;
     }
 
-    videoTransferEngine.initFromManifest(manifest);
+    if (selectedRoleFilter === 'all') {
+      videoTransferEngine.initFromManifest(manifest);
+    } else {
+      // Filter manifest to courses and videos matching the chosen role
+      const filteredCourses = manifest.courses.map((c) => ({
+        ...c,
+        modules: c.modules.map((m) => ({
+          ...m,
+          videos: m.videos.filter((v) => {
+            const role = videoTransferEngine.detectRole(c.title, m.title, v.title);
+            return role === selectedRoleFilter;
+          }),
+        })).filter((m) => m.videos.length > 0),
+      })).filter((c) => c.modules.length > 0);
+
+      videoTransferEngine.initFromManifest({
+        ...manifest,
+        courses: filteredCourses,
+      });
+    }
+
     try {
+      const activeCount = videoTransferEngine.getQueue().length;
       setNotification({
         type: 'info',
-        text: `Starting in-app transfer of ${totalVideos} videos directly to Google Drive...`,
+        text: `Starting in-app transfer of ${activeCount} videos (${selectedRoleFilter === 'all' ? 'All Roles' : selectedRoleFilter}) directly to Google Drive...`,
       });
       await videoTransferEngine.startTransfer(accessToken, cookiesRaw);
       setNotification({
@@ -248,6 +307,86 @@ export const SimplifiedDriveCopier: React.FC<SimplifiedDriveCopierProps> = ({
       type: 'info',
       text: 'Transfer paused. You can resume anytime.',
     });
+  };
+
+  const handleRetryAllFailed = () => {
+    if (!accessToken) {
+      setNotification({
+        type: 'error',
+        text: 'Please connect your Google Drive in Step 1 first.',
+      });
+      return;
+    }
+    videoTransferEngine.retryAllFailed(accessToken, cookiesRaw);
+    setNotification({
+      type: 'info',
+      text: 'Retrying all failed tasks in the queue...',
+    });
+  };
+
+  const handleDownloadColabNotebook = () => {
+    try {
+      const notebook = generateJupyterNotebook(config, manifest, cookiesRaw || '');
+      const jsonStr = JSON.stringify(notebook, null, 2);
+      downloadTextFile('SkillCapped_Drive_Archiver.ipynb', jsonStr, 'application/json');
+      setNotification({
+        type: 'success',
+        text: 'Google Colab Notebook (.ipynb) downloaded! Upload it to colab.research.google.com to archive at 10 Gbps.',
+      });
+    } catch (err: any) {
+      setNotification({
+        type: 'error',
+        text: 'Failed to generate Colab notebook: ' + err.message,
+      });
+    }
+  };
+
+  const handleDownloadPythonScript = () => {
+    try {
+      const script = generatePythonScript(config, manifest);
+      downloadTextFile('skillcapped_archiver.py', script, 'text/x-python');
+      setNotification({
+        type: 'success',
+        text: 'High-speed Python script (skillcapped_archiver.py) downloaded! Run with python3.',
+      });
+    } catch (err: any) {
+      setNotification({
+        type: 'error',
+        text: 'Failed to generate Python script: ' + err.message,
+      });
+    }
+  };
+
+  const handleDownloadShellScript = () => {
+    try {
+      const script = generateShellScript(config);
+      downloadTextFile('download_all.sh', script, 'application/x-sh');
+      setNotification({
+        type: 'success',
+        text: 'Shell script (download_all.sh) downloaded! Run with bash download_all.sh',
+      });
+    } catch (err: any) {
+      setNotification({
+        type: 'error',
+        text: 'Failed to generate Shell script: ' + err.message,
+      });
+    }
+  };
+
+  const handleCopyColabCode = async () => {
+    try {
+      const script = generatePythonScript(config, manifest);
+      await navigator.clipboard.writeText(script);
+      setNotification({
+        type: 'success',
+        text: 'Python archiver code copied to clipboard! Paste it directly into a Google Colab code cell.',
+      });
+    } catch {
+      setNotification({
+        type: 'error',
+        text: 'Failed to copy to clipboard.',
+      });
+    }
   };
 
   const handleBatchImport = (newManifest: ManifestData, mode: 'replace' | 'append') => {
@@ -511,7 +650,7 @@ export const SimplifiedDriveCopier: React.FC<SimplifiedDriveCopierProps> = ({
         </div>
 
         {/* STEP 3: ONE-CLICK SCRAPE DIRECTLY TO DRIVE */}
-        <div className="p-6 rounded-3xl bg-gradient-to-b from-slate-950 to-slate-900 border border-orange-500/40 shadow-xl space-y-4">
+        <div className="p-6 rounded-3xl bg-gradient-to-b from-slate-950 to-slate-900 border border-orange-500/40 shadow-xl space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-start space-x-3.5">
               <div className="w-9 h-9 rounded-xl bg-orange-500 text-slate-950 flex items-center justify-center font-black text-sm shrink-0 shadow-md">
@@ -522,7 +661,7 @@ export const SimplifiedDriveCopier: React.FC<SimplifiedDriveCopierProps> = ({
                   <span>Start Direct Scrape to Google Drive</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Downloads all {totalVideos} lessons across {totalCourses} courses directly into Google Drive folder "{driveFolderName}".
+                  Downloads lessons across {totalCourses} courses directly into Google Drive folder "{driveFolderName}".
                 </p>
               </div>
             </div>
@@ -532,9 +671,76 @@ export const SimplifiedDriveCopier: React.FC<SimplifiedDriveCopierProps> = ({
               onClick={() => setShowCourseList(!showCourseList)}
               className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold flex items-center space-x-1.5 border border-slate-700 shrink-0 self-start sm:self-auto"
             >
-              <span>{totalVideos} Videos Queued</span>
+              <span>{totalVideos} Videos Loaded</span>
               {showCourseList ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
             </button>
+          </div>
+
+          {/* Role Filter Chips */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span className="font-semibold text-slate-300">Filter by Target Role / Lane:</span>
+              <span className="font-mono text-orange-400 font-bold">
+                {selectedRoleFilter === 'all'
+                  ? `All ${totalVideos} Videos`
+                  : `${roleBreakdown[selectedRoleFilter] || 0} Videos`}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {[
+                { id: 'all', label: 'All Roles', count: totalVideos },
+                { id: 'Mid', label: 'Mid Lane', count: roleBreakdown.Mid },
+                { id: 'ADC', label: 'ADC / Bot', count: roleBreakdown.ADC },
+                { id: 'Top', label: 'Top Lane', count: roleBreakdown.Top },
+                { id: 'Jungle', label: 'Jungle', count: roleBreakdown.Jungle },
+                { id: 'Support', label: 'Support', count: roleBreakdown.Support },
+                { id: 'Fundamentals', label: 'Fundamentals', count: roleBreakdown.Fundamentals },
+              ].map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => setSelectedRoleFilter(r.id)}
+                  className={`px-3 py-1 rounded-xl text-xs font-bold transition flex items-center space-x-1.5 ${
+                    selectedRoleFilter === r.id
+                      ? 'bg-orange-500 text-slate-950 shadow-md scale-105'
+                      : 'bg-slate-950 text-slate-400 hover:text-slate-200 border border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  <span>{r.label}</span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                      selectedRoleFilter === r.id ? 'bg-slate-950/20 text-slate-950' : 'bg-slate-900 text-slate-500'
+                    }`}
+                  >
+                    {r.count}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Transfer Concurrency Selector */}
+          <div className="p-3 bg-slate-950/80 rounded-2xl border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center space-x-2">
+              <Zap className="h-4 w-4 text-orange-400" />
+              <span className="text-slate-300 font-semibold">Concurrency & Parallel Workers:</span>
+            </div>
+            <div className="flex items-center space-x-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
+              {[1, 2, 3].map((num) => (
+                <button
+                  key={num}
+                  type="button"
+                  onClick={() => videoTransferEngine.setConcurrency(num)}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition ${
+                    transferStats.concurrency === num
+                      ? 'bg-orange-500 text-slate-950 shadow'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {num === 1 ? '1x (Safe)' : num === 2 ? '2x (Parallel)' : '3x (Fast)'}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Queued Course Preview Accordion */}
@@ -597,7 +803,13 @@ export const SimplifiedDriveCopier: React.FC<SimplifiedDriveCopierProps> = ({
                 className="w-full py-4 px-6 bg-gradient-to-r from-orange-500 via-amber-500 to-orange-500 hover:from-orange-600 hover:to-amber-600 text-slate-950 font-black text-sm sm:text-base rounded-2xl shadow-xl transition-all flex items-center justify-center space-x-3 active:scale-95 group"
               >
                 <Zap className="h-5 w-5 fill-slate-950 group-hover:scale-110 transition-transform" />
-                <span>START TRANSFER: {totalVideos} VIDEOS DIRECTLY TO GOOGLE DRIVE</span>
+                <span>
+                  START TRANSFER:{' '}
+                  {selectedRoleFilter === 'all'
+                    ? `${totalVideos} VIDEOS`
+                    : `${roleBreakdown[selectedRoleFilter] || 0} ${selectedRoleFilter.toUpperCase()} VIDEOS`}{' '}
+                  DIRECTLY TO GOOGLE DRIVE
+                </span>
               </button>
             ) : (
               <button
@@ -606,6 +818,16 @@ export const SimplifiedDriveCopier: React.FC<SimplifiedDriveCopierProps> = ({
               >
                 <Pause className="h-5 w-5 fill-slate-950" />
                 <span>PAUSE IN-APP TRANSFER</span>
+              </button>
+            )}
+
+            {transferStats.failed > 0 && (
+              <button
+                onClick={handleRetryAllFailed}
+                className="w-full py-2.5 px-4 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 rounded-xl text-xs font-bold flex items-center justify-center space-x-2 transition"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span>RETRY ALL {transferStats.failed} FAILED VIDEOS</span>
               </button>
             )}
 
@@ -628,6 +850,111 @@ export const SimplifiedDriveCopier: React.FC<SimplifiedDriveCopierProps> = ({
               </div>
             </div>
           </div>
+        </div>
+
+        {/* BETTER WAYS: HIGH-SPEED CLOUD & CLI OPTIONS */}
+        <div className="p-6 rounded-3xl bg-slate-900 border border-slate-800 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2.5">
+              <div className="p-2 rounded-xl bg-orange-500/10 text-orange-400 border border-orange-500/20">
+                <Cloud className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center space-x-2">
+                  <span>Even Better Ways to Archive (Cloud & High-Speed)</span>
+                  <span className="px-2 py-0.5 text-[10px] font-extrabold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full">
+                    Recommended for 1,173 Videos
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Choose the optimal tool for your bandwidth and environment:
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowBetterWays(!showBetterWays)}
+              className="text-slate-400 hover:text-slate-200 text-xs font-semibold p-1"
+            >
+              {showBetterWays ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </button>
+          </div>
+
+          {showBetterWays && (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 text-xs">
+              {/* Option 1: Google Colab Cloud */}
+              <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between space-y-3">
+                <div className="space-y-2">
+                  <div className="flex items-center space-x-2 text-orange-400 font-bold">
+                    <Cloud className="h-4 w-4" />
+                    <span>1-Click Google Colab (.ipynb)</span>
+                  </div>
+                  <p className="text-slate-400 leading-relaxed text-[11px]">
+                    Runs inside Google's datacenter on a <strong>10 Gbps pipe</strong> directly into your Google Drive. You can turn off your laptop and it keeps downloading all 1,173 lessons.
+                  </p>
+                </div>
+                <div className="space-y-1.5 pt-2">
+                  <button
+                    onClick={handleDownloadColabNotebook}
+                    className="w-full py-2 bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 border border-orange-500/40 rounded-xl font-bold flex items-center justify-center space-x-1.5 transition"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span>Download Notebook (.ipynb)</span>
+                  </button>
+                  <button
+                    onClick={handleCopyColabCode}
+                    className="w-full py-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl font-medium flex items-center justify-center space-x-1.5 transition"
+                  >
+                    <Copy className="h-3 w-3" />
+                    <span>Copy Colab Code</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Option 2: Python Script */}
+              <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between space-y-3">
+                <div className="space-y-2">
+                  <div className="flex items-center space-x-2 text-emerald-400 font-bold">
+                    <FileCode className="h-4 w-4" />
+                    <span>High-Speed Python Archiver</span>
+                  </div>
+                  <p className="text-slate-400 leading-relaxed text-[11px]">
+                    Standalone script with <strong>aria2c 16-connection acceleration</strong>, Netscape cookie authentication, and automatic resume log (`archive.txt`).
+                  </p>
+                </div>
+                <div className="space-y-1.5 pt-2">
+                  <button
+                    onClick={handleDownloadPythonScript}
+                    className="w-full py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 rounded-xl font-bold flex items-center justify-center space-x-1.5 transition"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span>Download Python Script (.py)</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Option 3: Shell Script */}
+              <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between space-y-3">
+                <div className="space-y-2">
+                  <div className="flex items-center space-x-2 text-sky-400 font-bold">
+                    <Terminal className="h-4 w-4" />
+                    <span>Linux / macOS Shell Runner</span>
+                  </div>
+                  <p className="text-slate-400 leading-relaxed text-[11px]">
+                    Native bash script for Linux terminals, Mac terminal, or cloud VPS. Auto-installs yt-dlp & aria2c and organizes videos by course & module.
+                  </p>
+                </div>
+                <div className="space-y-1.5 pt-2">
+                  <button
+                    onClick={handleDownloadShellScript}
+                    className="w-full py-2 bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 rounded-xl font-bold flex items-center justify-center space-x-1.5 transition"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    <span>Download Shell Script (.sh)</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
